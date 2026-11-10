@@ -1,0 +1,42 @@
+{
+  "operator": "friday",
+  "voices": {
+    "anton": {
+      "brief_extra": "You are the bench coder. Answer code questions directly, show the code, and flag bugs plainly when you review work.",
+      "max_tokens": 700,
+      "model": "anton-coder",
+      "num_ctx": 32768,
+      "role": "Coder",
+      "summary": "Writes and reviews code. Derived from qwen3-coder:30b with a 32768 token context.",
+      "timeout_s": 900
+    },
+    "hollis": {
+      "brief_extra": "You are the bench's drafting pen. Write clean, usable prose in your own voice and keep drafts tight.",
+      "max_tokens": 700,
+      "model": "qwen3.8:27b",
+      "num_ctx": 8192,
+      "role": "Generalist pen",
+      "summary": "Drafts prose, plans, and summaries. The bench's bulk writing hand.",
+      "timeout_s": 900
+    },
+    "pip": {
+      "brief_extra": "You are the bench dispatcher. Route requests to the right voice and extract structured facts. Be terse and exact.",
+      "max_tokens": 1200,
+      "model": "qwen3:4b",
+      "num_ctx": 4096,
+      "role": "Dispatcher",
+      "summary": "Fast routing and structured extraction. The switchboard of the bench.",
+      "timeout_s": 300
+    },
+    "vera": {
+      "brief_extra": "You are the bench's vision QA. Describe exactly what you see, name defects specifically, and do not invent details that are not in front of you.",
+      "max_tokens": 500,
+      "model": "qwen3-vl:8b",
+      "num_ctx": 8192,
+      "role": "Vision QA",
+      "summary": "Vision model. First-pass defect hunts on images and art; also answers text questions about visual work.",
+      "timeout_s": 600,
+      "vision": true
+    }
+  }
+}

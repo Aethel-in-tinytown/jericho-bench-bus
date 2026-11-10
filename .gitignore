@@ -1,0 +1,9 @@
+bus.config.json
+.bus.lock
+messages.jsonl
+transcripts/
+__pycache__/
+*.pyc
+CHECKPOINT.md
+REPORT.md
+tests/live/
