@@ -7,3 +7,6 @@ __pycache__/
 CHECKPOINT.md
 REPORT.md
 tests/live/
+hosted/deploy/
+runner.token
+bus.token

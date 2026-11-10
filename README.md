@@ -66,7 +66,47 @@ Friday, the coordinator who convenes councils and reads the transcripts,
 is not a model on the bus. That separation is deliberate: the synthesizer
 should not also be a contestant.
 
-## Usage
+## Two homes: local mode and hosted mode
+
+The bus has a permanent home and a workbench, and they are the same
+program wearing two hats.
+
+**Hosted mode is the production target.** The post office lives in the
+Worker that serves jerichoreed.com: mailboxes, routing, state
+machines, and the transcript index in a KV namespace under a
+`benchbus:` prefix. The models never move; the bench host runs a thin
+runner (`hosted/runner.ps1`) that polls the post office, executes one
+message at a time against the local Ollama, and posts replies back.
+The runner has a single obvious off switch, an empty `BUS.OFF` file
+beside the script, so the desktop is never churned without warning.
+Writes to the post office require a shared bus token; the Worker
+stores only its SHA-256. Reads (inboxes, threads, the log) are
+public, because the transcripts are the portfolio.
+
+**Local mode is the dev and fallback mode.** `bus.py` on any machine
+talks straight to a local Ollama, with the same commands, the same
+message shapes, and the same log and transcript files. Everything in
+`examples/` was produced in local mode.
+
+Hosted mode is **staged, not yet deployed**: the Worker section, the
+runner, the client support, and the deploy tooling are in this repo
+under `hosted/`, verified against mocks (see below), and the deploy
+is sequenced after an unrelated accounts build finishes editing the
+same Worker. `hosted/INTEGRATION.md` is the whole deploy, ready to
+run. Nothing in this README claims the hosted bus is live, because
+it is not, yet.
+
+To use the client against the post office once it deploys:
+
+```sh
+export BENCH_BUS_REMOTE="https://jerichoreed.com/api/benchbus"
+export BENCH_BUS_TOKEN="<the bus token>"
+python3 bus.py ask pip "Route this: a bug fix, a blurb, and a screenshot check"
+python3 bus.py council "What is the riskiest assumption here?" --voices anton,hollis,pip
+python3 bus.py wait <thread-id>
+```
+
+## Usage (local mode)
 
 Requires Python 3.10+ and an Ollama instance with the bench models
 pulled. By default the bus looks for Ollama at `http://localhost:11434`;
@@ -102,8 +142,18 @@ Unit tests run against a mocked Ollama endpoint and prove the plumbing:
 logging, transcripts, relay handoffs, council rounds.
 
 ```sh
-python3 tests/test_bus.py
+python3 tests/test_bus.py     # local mode, mocked Ollama: 4 tests
+node tests/test_worker.mjs    # hosted post office, in-memory KV: 23 checks
+python3 tests/test_remote.py  # hosted client, canned post office: 5 tests
 ```
+
+The worker tests drive the real post office section through its full
+state machines: token auth, the ask lifecycle, a relay where the post
+office writes the handoff itself when the first leg replies, and a
+council whose cross round is created the moment the last independent
+answer lands. The deploy copy of the section (with the real token
+hash injected by `hosted/make_deploy.py`) was verified the same way
+against the real token.
 
 Live acceptance ran against the real bench on 2026-11-09, in less than
 ideal conditions: the model host is a working desktop, and during the
@@ -139,12 +189,18 @@ inside, which is rather the point of the design.
 ## Layout
 
 ```
-bus.py                  the whole bus (stdlib only)
-memory/roster.json      voices, models, briefs, limits
-memory/roster.md        the roster in human words
-tests/test_bus.py       mocked-endpoint unit tests
-tests/run_live_tests.sh live acceptance run against the real bench
-examples/               transcripts from the live acceptance run
+bus.py                    the bus client and local mode (stdlib only)
+memory/roster.json        voices, models, briefs, limits
+memory/roster.md          the roster in human words
+hosted/worker-benchbus.js the post office: a Worker section for jerichoreed.com
+hosted/runner.ps1         the bench-host runner (poll, execute, reply)
+hosted/INTEGRATION.md     the deploy, staged and ready
+hosted/make_deploy.py     builds the deploy copy and paste chunks
+tests/test_bus.py         local mode against a mocked Ollama
+tests/test_worker.mjs     the post office against an in-memory KV
+tests/test_remote.py      the hosted client against a canned post office
+tests/run_live_tests.sh   live acceptance runs against the real bench
+examples/                 transcripts from the live acceptance run
 ```
 
 ## License

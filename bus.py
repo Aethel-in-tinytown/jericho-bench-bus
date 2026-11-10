@@ -39,6 +39,17 @@ Commands:
     bus.py council "<question>" [--voices a,b,c] [--max-tokens N]
     bus.py inbox <voice>
     bus.py log [--thread ID] [--limit N]
+    bus.py wait <thread_id>           (hosted mode: watch a thread)
+
+Hosted mode: the bus's permanent home is a post office in the
+jerichoreed.com Worker (hosted/worker-benchbus.js); the models stay
+on the bench host, where a thin runner executes the mail. Set
+BENCH_BUS_REMOTE to the post office base (for example
+https://jerichoreed.com/api/benchbus) and BENCH_BUS_TOKEN to the bus
+token, and ask/relay/council/inbox/log talk to the post office
+instead of calling Ollama directly: the command posts the work,
+waits for the runner to answer, and prints the thread. Local mode
+(this file calling a local Ollama) remains the dev and fallback mode.
 """
 
 import argparse
@@ -269,6 +280,141 @@ def call_voice(name, prompt, roster, image_path=None, max_tokens=None,
     return ollama_chat(cfg, messages, max_tokens=max_tokens, num_ctx=num_ctx)
 
 
+# ---------------------------------------------------------------- hosted
+
+def remote_base():
+    base = os.environ.get("BENCH_BUS_REMOTE")
+    return base.rstrip("/") if base else None
+
+
+def remote_json(method, path, body=None, auth=False, timeout=30):
+    headers = {"Content-Type": "application/json"}
+    if auth:
+        token = os.environ.get("BENCH_BUS_TOKEN")
+        if not token:
+            raise SystemExit("BENCH_BUS_TOKEN is not set; hosted writes need it")
+        headers["X-Bus-Token"] = token
+    req = urllib.request.Request(
+        remote_base() + path,
+        data=json.dumps(body).encode("utf-8") if body is not None else None,
+        headers=headers, method=method,
+    )
+    # Default opener: the post office is a public site, reached the
+    # ordinary way (ambient egress proxy), not through the bench tunnel.
+    with urllib.request.build_opener().open(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def remote_wait_thread(thread_id, timeout_s=None):
+    timeout_s = timeout_s or int(os.environ.get("BENCH_BUS_WAIT_S", "1800"))
+    deadline = time.time() + timeout_s
+    while True:
+        data = remote_json("GET", f"/thread/{thread_id}")
+        if data["thread"]["status"] in ("done", "error"):
+            return data
+        if time.time() > deadline:
+            raise SystemExit(f"thread {thread_id} still open after {timeout_s}s")
+        time.sleep(10)
+
+
+def _responses_by_parent(messages):
+    by_parent = {}
+    for m in messages:
+        if m.get("in_reply_to"):
+            by_parent[m["in_reply_to"]] = m
+    return by_parent
+
+
+def remote_cmd_ask(args, roster):
+    body = {"voice": args.voice, "prompt": args.prompt}
+    if args.image:
+        body["image"] = base64.b64encode(
+            Path(args.image).read_bytes()).decode("ascii")
+    created = remote_json("POST", "/ask", body, auth=True)
+    data = remote_wait_thread(created["thread_id"])
+    by_parent = _responses_by_parent(data["messages"])
+    reply = by_parent.get(created["task_id"])
+    if reply:
+        print(f"[{args.voice}] {reply['body']}")
+    print(f"(hosted thread {created['thread_id']}, status "
+          f"{data['thread']['status']})", file=sys.stderr)
+    return 0 if data["thread"]["status"] == "done" else 1
+
+
+def remote_cmd_relay(args, roster):
+    created = remote_json("POST", "/relay", {
+        "from_voice": args.from_voice, "to_voice": args.to_voice,
+        "task": args.task,
+    }, auth=True)
+    data = remote_wait_thread(created["thread_id"])
+    for m in data["messages"]:
+        if m["kind"] in ("handoff", "response", "error"):
+            print(f"[{m['from']}] {m['body']}\n")
+    print(f"(hosted thread {created['thread_id']}, status "
+          f"{data['thread']['status']})", file=sys.stderr)
+    return 0 if data["thread"]["status"] == "done" else 1
+
+
+def remote_cmd_council(args, roster):
+    voices = [v.strip() for v in args.voices.split(",") if v.strip()]
+    created = remote_json("POST", "/council", {
+        "question": args.question, "voices": voices,
+    }, auth=True)
+    data = remote_wait_thread(created["thread_id"])
+    by_parent = _responses_by_parent(data["messages"])
+    label = {}
+    for m in data["messages"]:
+        if m["kind"] in ("council_question", "council_cross"):
+            label[m["id"]] = "answer" if m["kind"] == "council_question" else "cross"
+    for m in data["messages"]:
+        if m["kind"] == "response":
+            kind = label.get(m.get("in_reply_to"), "answer")
+            print(f"[{m['from']} / {kind}] {m['body']}\n")
+    print(f"(hosted thread {created['thread_id']}, status "
+          f"{data['thread']['status']}; synthesis is the operator's job)",
+          file=sys.stderr)
+    return 0 if data["thread"]["status"] == "done" else 1
+
+
+def remote_cmd_inbox(args, roster):
+    data = remote_json("GET", f"/inbox/{args.voice}?limit={args.limit}")
+    msgs = data.get("messages", [])
+    if not msgs:
+        print(f"inbox for {args.voice}: empty")
+        return 0
+    print(f"inbox for {args.voice}: {len(msgs)} message(s)")
+    for m in msgs:
+        body = m["body"].replace("\n", " ")
+        if len(body) > 220:
+            body = body[:220] + "..."
+        print(f"- [{m['ts']}] {m['from']} ({m['kind']}, thread "
+              f"{m['thread_id']}): {body}")
+    return 0
+
+
+def remote_cmd_log(args, roster):
+    path = "/log?limit=" + str(args.limit)
+    if args.thread:
+        path += "&thread=" + args.thread
+    data = remote_json("GET", path)
+    for m in data.get("messages", []):
+        print(f"[{m['ts']}] {m['from']} -> {m['to']} ({m['kind']}, "
+              f"thread {m['thread_id']})")
+        print(m["body"])
+        print()
+    return 0
+
+
+def remote_cmd_wait(args, roster):
+    data = remote_wait_thread(args.thread_id)
+    for m in data["messages"]:
+        print(f"[{m['ts']}] {m['from']} -> {m['to']} ({m['kind']})")
+        print(m["body"])
+        print()
+    print(f"(thread status {data['thread']['status']})", file=sys.stderr)
+    return 0 if data["thread"]["status"] == "done" else 1
+
+
 # ---------------------------------------------------------------- commands
 
 def cmd_voices(args, roster):
@@ -469,8 +615,23 @@ def main(argv=None):
     pl.add_argument("--thread")
     pl.add_argument("--limit", type=int, default=20)
 
+    pw = sub.add_parser("wait", help="hosted mode: watch a thread until it closes")
+    pw.add_argument("thread_id")
+
     args = p.parse_args(argv)
     roster = load_roster()
+    if remote_base() and args.cmd in ("ask", "relay", "council",
+                                      "inbox", "log", "wait"):
+        fn = {
+            "ask": remote_cmd_ask, "relay": remote_cmd_relay,
+            "council": remote_cmd_council, "inbox": remote_cmd_inbox,
+            "log": remote_cmd_log, "wait": remote_cmd_wait,
+        }[args.cmd]
+        return fn(args, roster)
+    if args.cmd == "wait":
+        print("wait is a hosted-mode command; set BENCH_BUS_REMOTE",
+              file=sys.stderr)
+        return 2
     fn = {
         "voices": cmd_voices, "ping": cmd_ping, "ask": cmd_ask,
         "relay": cmd_relay, "council": cmd_council, "inbox": cmd_inbox,
